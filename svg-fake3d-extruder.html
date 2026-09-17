@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SVG Fake-3D Extruder + Skew/Rotate Baker → SVG / Lottie Export</title>
+<style>
+  :root{
+    --bg:#0e0f13; --panel:#161821; --panel-2:#1e2029;
+    --accent:#c9a24a; --text:#e8e6e1; --muted:#8b8d97; --border:#2a2c37;
+  }
+  *{box-sizing:border-box;}
+  html,body{ margin:0; height:100%; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  #app{ display:flex; height:100vh; }
+  #panel{ width:360px; min-width:360px; background:var(--panel); border-right:1px solid var(--border);
+    padding:18px; overflow-y:auto; display:flex; flex-direction:column; gap:14px; }
+  #stage{ flex:1; display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden; }
+  #stage svg{ max-width:90%; max-height:90%; background:
+    repeating-conic-gradient(#20222c 0% 25%, #191a22 0% 50%) 50% / 20px 20px; border-radius:8px; }
+
+  h1{ font-size:14px; margin:0; color:var(--accent); font-weight:600; letter-spacing:.2px; }
+  h2{ font-size:11px; margin:0; color:var(--text); text-transform:uppercase; letter-spacing:.6px; opacity:.75; }
+  .sub{ font-size:11px; color:var(--muted); line-height:1.4; margin:0; }
+
+  #dropzone{ border:1.5px dashed var(--border); border-radius:10px; padding:20px 10px; text-align:center;
+    cursor:pointer; font-size:12px; color:var(--muted); }
+  #dropzone:hover, #dropzone.drag{ border-color:var(--accent); color:var(--accent); background:rgba(201,162,74,.05); }
+  #fileInput{ display:none; }
+
+  .field{ display:flex; flex-direction:column; gap:6px; }
+  label{ font-size:11px; color:var(--muted); display:flex; justify-content:space-between; }
+  label span.val{ color:var(--accent); font-variant-numeric:tabular-nums; }
+  .slider-row{ display:flex; gap:8px; align-items:center; }
+  input[type=range]{ flex:1; -webkit-appearance:none; height:4px; border-radius:2px; background:var(--border); }
+  input[type=range]::-webkit-slider-thumb{ -webkit-appearance:none; width:14px; height:14px; border-radius:50%;
+    background:var(--accent); cursor:pointer; border:2px solid #0e0f13; }
+  input[type=number]{ width:54px; background:var(--panel-2); color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:5px; font-size:11px; }
+  input[type=color]{ width:100%; height:30px; border:1px solid var(--border); border-radius:6px; background:none; padding:0; cursor:pointer; }
+  input[type=checkbox]{ accent-color:var(--accent); }
+  .checkline{ display:flex; align-items:center; gap:8px; font-size:12px; color:var(--text); }
+  .row2{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+
+  button{ background:var(--accent); color:#1a1408; border:none; border-radius:7px; padding:10px 12px;
+    font-size:12px; font-weight:600; cursor:pointer; }
+  button:hover{ filter:brightness(1.1); }
+  button.secondary{ background:var(--panel-2); color:var(--text); border:1px solid var(--border); }
+  .btn-row{ display:flex; gap:8px; }
+  .btn-row button{ flex:1; }
+  hr{ border:none; border-top:1px solid var(--border); margin:2px 0; }
+  #status{ font-size:11px; color:var(--muted); min-height:14px; }
+  #status.err{ color:#e06a6a; }
+  #status.ok{ color:#7fbf7f; }
+  ::-webkit-scrollbar{ width:6px; }
+  ::-webkit-scrollbar-thumb{ background:var(--border); border-radius:3px; }
+  #bboxInfo{ font-size:10px; color:var(--muted); }
+  details{ border:1px solid var(--border); border-radius:8px; padding:10px 12px; }
+  details summary{ cursor:pointer; font-size:12px; color:var(--text); font-weight:600; }
+  details[open] summary{ margin-bottom:10px; }
+  .stack{ display:flex; flex-direction:column; gap:12px; margin-top:8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="panel">
+    <div>
+      <h1>FAKE-3D EXTRUDER + SKEW BAKER</h1>
+      <p class="sub">Upload a flat SVG, optionally skew/rotate it, then add a facet-based fake-3D extrusion (front cap + shaded side walls, like a Lottielab sticker). Export a flat SVG with everything baked into real coordinates and gradients — no transforms, no skew props.</p>
+    </div>
+
+    <div id="dropzone">
+      Drop an .svg file here<br/>or click to browse
+      <input type="file" id="fileInput" accept=".svg,image/svg+xml"/>
+    </div>
+    <div id="status"></div>
+    <div id="bboxInfo"></div>
+
+    <hr/>
+
+    <details open>
+      <summary>1 · Skew / Rotate / Scale</summary>
+      <div class="stack">
+        <div class="field">
+          <label>Rotate (°) <span class="val" id="rotVal">0</span></label>
+          <div class="slider-row">
+            <input type="range" id="rot" min="-180" max="180" step="0.5" value="0"/>
+            <input type="number" id="rotNum" min="-180" max="180" step="0.5" value="0"/>
+          </div>
+        </div>
+        <div class="field">
+          <label>Skew X (°) <span class="val" id="skxVal">0</span></label>
+          <div class="slider-row">
+            <input type="range" id="skx" min="-85" max="85" step="0.5" value="0"/>
+            <input type="number" id="skxNum" min="-85" max="85" step="0.5" value="0"/>
+          </div>
+        </div>
+        <div class="field">
+          <label>Skew Y (°) <span class="val" id="skyVal">0</span></label>
+          <div class="slider-row">
+            <input type="range" id="sky" min="-85" max="85" step="0.5" value="0"/>
+            <input type="number" id="skyNum" min="-85" max="85" step="0.5" value="0"/>
+          </div>
+        </div>
+        <div class="field">
+          <label>Uniform Scale (%) <span class="val" id="scaleVal">100</span></label>
+          <div class="slider-row">
+            <input type="range" id="scale" min="10" max="300" step="1" value="100"/>
+            <input type="number" id="scaleNum" min="10" max="300" step="1" value="100"/>
+          </div>
+        </div>
+        <div class="checkline">
+          <input type="checkbox" id="pivotToggle" checked/>
+          <label for="pivotToggle" style="margin:0;">Pivot around shape center</label>
+        </div>
+        <button id="resetTransformBtn" class="secondary">Reset Transform</button>
+      </div>
+    </details>
+
+    <details open>
+      <summary>2 · Fake 3D Extrude</summary>
+      <div class="stack">
+        <div class="checkline">
+          <input type="checkbox" id="extrudeEnable"/>
+          <label for="extrudeEnable" style="margin:0;">Enable extrusion</label>
+        </div>
+
+        <div class="field">
+          <label>Push Angle (°, 90 = down) <span class="val" id="angVal">90</span></label>
+          <div class="slider-row">
+            <input type="range" id="ang" min="0" max="360" step="1" value="90"/>
+            <input type="number" id="angNum" min="0" max="360" step="1" value="90"/>
+          </div>
+        </div>
+        <div class="field">
+          <label>Depth (px) <span class="val" id="depthVal">14</span></label>
+          <div class="slider-row">
+            <input type="range" id="depth" min="0" max="120" step="1" value="14"/>
+            <input type="number" id="depthNum" min="0" max="120" step="1" value="14"/>
+          </div>
+        </div>
+        <div class="field">
+          <label>Curve Smoothness <span class="val" id="segVal">24</span></label>
+          <input type="range" id="seg" min="4" max="48" step="1" value="24"/>
+        </div>
+
+        <h2>Front Face Gradient</h2>
+        <div class="row2">
+          <div class="field"><label>Top</label><input type="color" id="frontTop" value="#8c8a63"/></div>
+          <div class="field"><label>Bottom</label><input type="color" id="frontBottom" value="#5f5a35"/></div>
+        </div>
+
+        <h2>Side Wall Gradient</h2>
+        <div class="row2">
+          <div class="field"><label>Near edge</label><input type="color" id="wallNear" value="#4a441f"/></div>
+          <div class="field"><label>Far edge</label><input type="color" id="wallFar" value="#232008"/></div>
+        </div>
+      </div>
+    </details>
+
+    <hr/>
+
+    <div class="btn-row">
+      <button id="exportSvgBtn">Export Flat SVG</button>
+      <button id="exportLottieBtn" class="secondary">Export Lottie JSON</button>
+    </div>
+    <p class="sub" style="margin-top:-6px;">SVG export is fully flat (real gradients, real coordinates, zero transforms) — drag it straight into Lottielab.</p>
+  </div>
+
+  <div id="stage">
+    <svg id="preview" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+</div>
+
+<script>
+(function(){
+
+  // =========================================================
+  // PATH PARSING → cubic segment model (same as before)
+  // =========================================================
+  function tokenizePath(d){
+    const tokens = [];
+    const re = /([MmLlHhVvCcSsQqTtAaZz])|(-?\d*\.?\d+(?:e[-+]?\d+)?)/g;
+    let m;
+    while ((m = re.exec(d))) {
+      if (m[1]) tokens.push({cmd:m[1]});
+      else tokens.push({num:parseFloat(m[2])});
+    }
+    return tokens;
+  }
+
+  function arcToCubics(x0,y0, rx,ry, xAxisRotDeg, largeArc, sweep, x, y){
+    if (rx === 0 || ry === 0) return [{p1:[x0,y0], p2:[x,y], p3:[x,y]}];
+    rx = Math.abs(rx); ry = Math.abs(ry);
+    const phi = xAxisRotDeg * Math.PI/180;
+    const cosPhi = Math.cos(phi), sinPhi = Math.sin(phi);
+    const dx2 = (x0 - x)/2, dy2 = (y0 - y)/2;
+    const x1p = cosPhi*dx2 + sinPhi*dy2;
+    const y1p = -sinPhi*dx2 + cosPhi*dy2;
+    let rxs = rx*rx, rys = ry*ry;
+    const x1ps = x1p*x1p, y1ps = y1p*y1p;
+    const lambda = x1ps/rxs + y1ps/rys;
+    if (lambda > 1) { const s = Math.sqrt(lambda); rx*=s; ry*=s; rxs=rx*rx; rys=ry*ry; }
+    const sign = (largeArc !== sweep) ? 1 : -1;
+    let num = rxs*rys - rxs*y1ps - rys*x1ps;
+    if (num < 0) num = 0;
+    const co = sign*Math.sqrt(num/(rxs*y1ps + rys*x1ps || 1e-9));
+    const cxp = co*(rx*y1p/ry);
+    const cyp = co*(-ry*x1p/rx);
+    const cx = cosPhi*cxp - sinPhi*cyp + (x0+x)/2;
+    const cy = sinPhi*cxp + cosPhi*cyp + (y0+y)/2;
+    function ang(ux,uy,vx,vy){
+      const dot = ux*vx+uy*vy;
+      const len = Math.sqrt((ux*ux+uy*uy)*(vx*vx+vy*vy)) || 1e-9;
+      let a = Math.acos(Math.min(1,Math.max(-1,dot/len)));
+      if (ux*vy - uy*vx < 0) a = -a;
+      return a;
+    }
+    const theta1 = ang(1,0,(x1p-cxp)/rx,(y1p-cyp)/ry);
+    let dTheta = ang((x1p-cxp)/rx,(y1p-cyp)/ry, (-x1p-cxp)/rx, (-y1p-cyp)/ry);
+    if (!sweep && dTheta > 0) dTheta -= 2*Math.PI;
+    if (sweep && dTheta < 0) dTheta += 2*Math.PI;
+    const segCount = Math.max(1, Math.ceil(Math.abs(dTheta)/(Math.PI/2)));
+    const delta = dTheta/segCount;
+    const t = 4/3*Math.tan(delta/4);
+    const cubics = [];
+    let theta = theta1;
+    for (let i=0;i<segCount;i++){
+      const theta2 = theta+delta;
+      const c1x = cx + rx*Math.cos(theta) - t*rx*Math.sin(theta);
+      const c1y = cy + ry*Math.sin(theta) + t*ry*Math.cos(theta);
+      const ex = cx + rx*Math.cos(theta2);
+      const ey = cy + ry*Math.sin(theta2);
+      const c2x = ex + t*rx*Math.sin(theta2);
+      const c2y = ey - t*ry*Math.cos(theta2);
+      function rot(px,py){ return [cosPhi*(px-cx)-sinPhi*(py-cy)+cx, sinPhi*(px-cx)+cosPhi*(py-cy)+cy]; }
+      const P1 = rot(c1x,c1y), P2 = rot(c2x,c2y), P3 = rot(ex,ey);
+      cubics.push({p1:P1, p2:P2, p3:P3});
+      theta = theta2;
+    }
+    return cubics;
+  }
+
+  function parsePathD(d){
+    const tokens = tokenizePath(d);
+    let i = 0;
+    function nextNum(){ return tokens[i++].num; }
+    let cx=0, cy=0, sx=0, sy=0;
+    let subpaths = [];
+    let cur = null;
+    let cmd = null;
+    let prevCtrl = null;
+
+    function startSub(x,y){ cur = { closed:false, segs:[] }; subpaths.push(cur); sx=x; sy=y; }
+    function lineTo(x,y){ cur.segs.push({p0:[cx,cy], p1:[cx,cy], p2:[x,y], p3:[x,y]}); cx=x; cy=y; }
+    function cubicTo(x1,y1,x2,y2,x,y){ cur.segs.push({p0:[cx,cy], p1:[x1,y1], p2:[x2,y2], p3:[x,y]}); cx=x; cy=y; }
+
+    while (i < tokens.length){
+      if (tokens[i].cmd){ cmd = tokens[i].cmd; i++; }
+      const isRel = cmd === cmd.toLowerCase();
+      const C = cmd.toUpperCase();
+
+      if (C === 'M'){
+        let x = nextNum(), y = nextNum();
+        if (isRel && cur){ x+=cx; y+=cy; }
+        startSub(x,y); cx=x; cy=y; prevCtrl=null;
+        while (i<tokens.length && tokens[i].num!==undefined){
+          let lx=nextNum(), ly=nextNum();
+          if (isRel){ lx+=cx; ly+=cy; }
+          lineTo(lx,ly);
+        }
+      } else if (C === 'L'){
+        while (i<tokens.length && tokens[i].num!==undefined){
+          let x=nextNum(), y=nextNum();
+          if (isRel){ x+=cx; y+=cy; }
+          lineTo(x,y);
+        }
+        prevCtrl=null;
+      } else if (C === 'H'){
+        while (i<tokens.length && tokens[i].num!==undefined){
+          let x=nextNum(); if (isRel) x+=cx; lineTo(x,cy);
+        }
+        prevCtrl=null;
+      } else if (C === 'V'){
+        while (i<tokens.length && tokens[i].num!==undefined){
+          let y=nextNum(); if (isRel) y+=cy; lineTo(cx,y);
+        }
+        prevCtrl=null;
+      } else if (C === 'C'){
+        while (i<tokens.length && tokens[i].num!==undefined){
+          let x1=nextNum(),y1=nextNum(),x2=nextNum(),y2=nextNum(),x=nextNum(),y=nextNum();
+          if (isRel){ x1+=cx;y1+=cy;x2+=cx;y2+=cy;x+=cx;y+=cy; }
+          cubicTo(x1,y1,x2,y2,x,y); prevCtrl=[x2,y2];
+        }
+      } else if (C === 'S'){
+        while (i<tokens.length && tokens[i].num!==undefined){
+          let x2=nextNum(),y2=nextNum(),x=nextNum(),y=nextNum();
+          if (isRel){ x2+=cx;y2+=cy;x+=cx;y+=cy; }
+          const x1 = prevCtrl ? 2*cx-prevCtrl[0] : cx;
+          const y1 = prevCtrl ? 2*cy-prevCtrl[1] : cy;
+          cubicTo(x1,y1,x2,y2,x,y); prevCtrl=[x2,y2];
+        }
+      } else if (C === 'Q'){
+        while (i<tokens.length && tokens[i].num!==undefined){
+          let x1=nextNum(),y1=nextNum(),x=nextNum(),y=nextNum();
+          if (isRel){ x1+=cx;y1+=cy;x+=cx;y+=cy; }
+          const c1x = cx + 2/3*(x1-cx), c1y = cy + 2/3*(y1-cy);
+          const c2x = x + 2/3*(x1-x), c2y = y + 2/3*(y1-y);
+          cubicTo(c1x,c1y,c2x,c2y,x,y); prevCtrl=[x1,y1];
+        }
+      } else if (C === 'T'){
+        while (i<tokens.length && tokens[i].num!==undefined){
+          let x=nextNum(),y=nextNum();
+          if (isRel){ x+=cx;y+=cy; }
+          const x1 = prevCtrl ? 2*cx-prevCtrl[0] : cx;
+          const y1 = prevCtrl ? 2*cy-prevCtrl[1] : cy;
+          const c1x = cx + 2/3*(x1-cx), c1y = cy + 2/3*(y1-cy);
+          const c2x = x + 2/3*(x1-x), c2y = y + 2/3*(y1-y);
+          cubicTo(c1x,c1y,c2x,c2y,x,y); prevCtrl=[x1,y1];
+        }
+      } else if (C === 'A'){
+        while (i<tokens.length && tokens[i].num!==undefined){
+          let rx=nextNum(), ry=nextNum(), rot=nextNum(), laf=nextNum(), swf=nextNum(), x=nextNum(), y=nextNum();
+          if (isRel){ x+=cx; y+=cy; }
+          const cubics = arcToCubics(cx,cy, rx,ry, rot, laf!==0, swf!==0, x,y);
+          cubics.forEach(seg=>{
+            cur.segs.push({p0:[cx,cy], p1:seg.p1, p2:seg.p2, p3:seg.p3});
+            cx = seg.p3[0]; cy = seg.p3[1];
+          });
+        }
+        prevCtrl=null;
+      } else if (C === 'Z'){
+        if (cur && (cx!==sx || cy!==sy)){
+          cur.segs.push({p0:[cx,cy], p1:[cx,cy], p2:[sx,sy], p3:[sx,sy]});
+        }
+        cx=sx; cy=sy; if (cur) cur.closed = true; prevCtrl=null;
+      } else { i++; }
+    }
+    return subpaths;
+  }
+
+  function extractSubpathsFromSVG(svgText){
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(svgText, 'image/svg+xml');
+    if (doc.querySelector('parsererror')) throw new Error('Invalid SVG XML');
+    const pathEls = Array.from(doc.querySelectorAll('path'));
+    if (pathEls.length === 0) throw new Error('No <path> elements found (only <path> shapes are supported).');
+    const shapes = [];
+    pathEls.forEach(el=>{
+      const d = el.getAttribute('d');
+      if (!d) return;
+      const fill = el.getAttribute('fill') || (el.style && el.style.fill) || '#000000';
+      const subpaths = parsePathD(d);
+      shapes.push({ fill: fill === 'none' ? '#000000' : fill, subpaths });
+    });
+    return shapes;
+  }
+
+  // =========================================================
+  // AFFINE TRANSFORM (skew / rotate / scale)
+  // =========================================================
+  function buildMatrix(rotDeg, skxDeg, skyDeg, scalePct, cx, cy, useCenter){
+    const rot = rotDeg*Math.PI/180;
+    const skx = Math.tan(skxDeg*Math.PI/180);
+    const sky = Math.tan(skyDeg*Math.PI/180);
+    const s = scalePct/100;
+    const px = useCenter ? cx : 0, py = useCenter ? cy : 0;
+    function mul(a,b){
+      return [
+        a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1],
+        a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3],
+        a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5]
+      ];
+    }
+    const T1 = [1,0,0,1,-px,-py];
+    const Sc = [s,0,0,s,0,0];
+    const Skx= [1,0,skx,1,0,0];
+    const Sky= [1,sky,0,1,0,0];
+    const R  = [Math.cos(rot),Math.sin(rot),-Math.sin(rot),Math.cos(rot),0,0];
+    const T2 = [1,0,0,1,px,py];
+    let M = T1;
+    M = mul(Sc, M); M = mul(Skx, M); M = mul(Sky, M); M = mul(R, M); M = mul(T2, M);
+    return M;
+  }
+  function applyMatrix(M, p){ return [ M[0]*p[0]+M[2]*p[1]+M[4], M[1]*p[0]+M[3]*p[1]+M[5] ]; }
+
+  function bboxOfShapes(shapes){
+    let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+    shapes.forEach(shape=>shape.subpaths.forEach(sp=>sp.segs.forEach(seg=>{
+      [seg.p0,seg.p1,seg.p2,seg.p3].forEach(p=>{
+        if (p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
+        if (p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
+      });
+    })));
+    if (!isFinite(minX)) return {minX:0,minY:0,maxX:200,maxY:200};
+    return {minX,minY,maxX,maxY};
+  }
+
+  function transformShapes(shapes, M){
+    return shapes.map(shape=>({
+      fill: shape.fill,
+      subpaths: shape.subpaths.map(sp=>({
+        closed: sp.closed,
+        segs: sp.segs.map(seg=>({
+          p0: applyMatrix(M, seg.p0), p1: applyMatrix(M, seg.p1),
+          p2: applyMatrix(M, seg.p2), p3: applyMatrix(M, seg.p3),
+        }))
+      }))
+    }));
+  }
+
+  function shapeToPathD(shape){
+    let d = '';
+    shape.subpaths.forEach(sp=>{
+      if (sp.segs.length===0) return;
+      const p0 = sp.segs[0].p0;
+      d += `M ${p0[0].toFixed(3)} ${p0[1].toFixed(3)} `;
+      sp.segs.forEach(seg=>{
+        d += `C ${seg.p1[0].toFixed(3)} ${seg.p1[1].toFixed(3)} ${seg.p2[0].toFixed(3)} ${seg.p2[1].toFixed(3)} ${seg.p3[0].toFixed(3)} ${seg.p3[1].toFixed(3)} `;
+      });
+      if (sp.closed) d += 'Z ';
+    });
+    return d.trim();
+  }
+
+  // =========================================================
+  // FAKE-3D EXTRUDE: sample curves → polygon, find outward
+  // normals via centroid test (winding-agnostic), group
+  // contiguous "push-facing" edges into wall facets.
+  // =========================================================
+  function sampleSubpathToPolygon(sp, segsPerCurve){
+    const pts = [];
+    sp.segs.forEach((seg, idx)=>{
+      const steps = segsPerCurve;
+      const startT = 0; // always include start of each seg (avoids dup except first)
+      for (let s = (idx===0?0:1); s<=steps; s++){
+        const t = s/steps;
+        const mt = 1-t;
+        const x = mt*mt*mt*seg.p0[0] + 3*mt*mt*t*seg.p1[0] + 3*mt*t*t*seg.p2[0] + t*t*t*seg.p3[0];
+        const y = mt*mt*mt*seg.p0[1] + 3*mt*mt*t*seg.p1[1] + 3*mt*t*t*seg.p2[1] + t*t*t*seg.p3[1];
+        pts.push([x,y]);
+      }
+    });
+    // drop duplicate closing point if nearly identical to first
+    if (pts.length>1){
+      const a=pts[0], b=pts[pts.length-1];
+      if (Math.hypot(a[0]-b[0], a[1]-b[1]) < 1e-4) pts.pop();
+    }
+    return pts;
+  }
+
+  function polygonCentroid(pts){
+    let cx=0, cy=0;
+    pts.forEach(p=>{ cx+=p[0]; cy+=p[1]; });
+    return [cx/pts.length, cy/pts.length];
+  }
+
+  function buildWallFacetsForPolygon(pts, D, depth){
+    const n = pts.length;
+    if (n < 3) return [];
+    const centroid = polygonCentroid(pts);
+    const eps = 0.75;
+    const visible = new Array(n); // visible[i] = is edge (pts[i]->pts[i+1]) a push-facing wall
+    for (let i=0;i<n;i++){
+      const a = pts[i], b = pts[(i+1)%n];
+      const dx = b[0]-a[0], dy = b[1]-a[1];
+      let nx = dy, ny = -dx;
+      const len = Math.hypot(nx,ny) || 1;
+      nx/=len; ny/=len;
+      const mx=(a[0]+b[0])/2, my=(a[1]+b[1])/2;
+      const dOrig = Math.hypot(mx-centroid[0], my-centroid[1]);
+      const dTest  = Math.hypot((mx+nx*eps)-centroid[0], (my+ny*eps)-centroid[1]);
+      if (dTest < dOrig) { nx=-nx; ny=-ny; } // flip so normal points outward
+      const dot = nx*D[0] + ny*D[1];
+      visible[i] = dot > 0.02;
+    }
+    // find contiguous runs (handle wraparound)
+    const facets = [];
+    let i0 = 0;
+    // rotate start to a non-visible->visible boundary if possible, to avoid split runs at index 0
+    let startIdx = 0;
+    for (let i=0;i<n;i++){ if (!visible[i] && visible[(i+1)%n]) { startIdx = (i+1)%n; break; } }
+    let i = 0;
+    while (i < n){
+      const idx = (startIdx+i)%n;
+      if (visible[idx]){
+        let runStart = idx, runLen = 0;
+        while (runLen < n && visible[(startIdx+i)%n]){ i++; runLen++; }
+        // vertices from runStart .. runStart+runLen (inclusive) along front boundary
+        const frontChain = [];
+        for (let k=0;k<=runLen;k++) frontChain.push(pts[(runStart+k)%n]);
+        const backChain = frontChain.map(p=>[p[0]+D[0]*depth, p[1]+D[1]*depth]);
+        const poly = frontChain.concat(backChain.slice().reverse());
+        facets.push(poly);
+      } else {
+        i++;
+      }
+    }
+    return facets;
+  }
+
+  function polygonToPathD(poly){
+    let d = `M ${poly[0][0].toFixed(3)} ${poly[0][1].toFixed(3)} `;
+    for (let i=1;i<poly.length;i++) d += `L ${poly[i][0].toFixed(3)} ${poly[i][1].toFixed(3)} `;
+    d += 'Z';
+    return d;
+  }
+
+  // =========================================================
+  // APP STATE
+  // =========================================================
+  let originalShapes = null;
+  const state = {
+    rot:0, skx:0, sky:0, scale:100, useCenter:true,
+    extrude:false, angle:90, depth:14, segPerCurve:24,
+    frontTop:'#8c8a63', frontBottom:'#5f5a35',
+    wallNear:'#4a441f', wallFar:'#232008'
+  };
+  let bakedShapes = null, bakedBBox = null;
+  let wallFacetsByShape = null; // parallel to bakedShapes
+
+  function setStatus(msg, cls){
+    const el = document.getElementById('status');
+    el.textContent = msg; el.className = cls||'';
+  }
+
+  function recompute(){
+    if (!originalShapes) return;
+    const bbox0 = bboxOfShapes(originalShapes);
+    const cx = (bbox0.minX+bbox0.maxX)/2, cy=(bbox0.minY+bbox0.maxY)/2;
+    const M = buildMatrix(state.rot, state.skx, state.sky, state.scale, cx, cy, state.useCenter);
+    bakedShapes = transformShapes(originalShapes, M);
+    bakedBBox = bboxOfShapes(bakedShapes);
+
+    wallFacetsByShape = null;
+    if (state.extrude){
+      const rad = state.angle*Math.PI/180;
+      const D = [Math.cos(rad), Math.sin(rad)];
+      wallFacetsByShape = bakedShapes.map(shape=>{
+        const facetsPerSubpath = shape.subpaths.map(sp=>{
+          const poly = sampleSubpathToPolygon(sp, state.segPerCurve);
+          return buildWallFacetsForPolygon(poly, D, state.depth);
+        });
+        return facetsPerSubpath.flat();
+      });
+    }
+    renderPreview();
+  }
+
+  function ensureDefs(svg){
+    let defs = svg.querySelector('defs');
+    if (!defs){ defs = document.createElementNS('http://www.w3.org/2000/svg','defs'); svg.insertBefore(defs, svg.firstChild); }
+    return defs;
+  }
+
+  function makeLinearGradient(svg, id, x1,y1,x2,y2, colorA, colorB){
+    const defs = ensureDefs(svg);
+    const grad = document.createElementNS('http://www.w3.org/2000/svg','linearGradient');
+    grad.setAttribute('id', id);
+    grad.setAttribute('gradientUnits','userSpaceOnUse');
+    grad.setAttribute('x1',x1.toFixed(3)); grad.setAttribute('y1',y1.toFixed(3));
+    grad.setAttribute('x2',x2.toFixed(3)); grad.setAttribute('y2',y2.toFixed(3));
+    const s1 = document.createElementNS('http://www.w3.org/2000/svg','stop');
+    s1.setAttribute('offset','0%'); s1.setAttribute('stop-color', colorA);
+    const s2 = document.createElementNS('http://www.w3.org/2000/svg','stop');
+    s2.setAttribute('offset','100%'); s2.setAttribute('stop-color', colorB);
+    grad.appendChild(s1); grad.appendChild(s2);
+    defs.appendChild(grad);
+    return id;
+  }
+
+  function buildSceneSVG(target, offX, offY){
+    // Draws walls first (per shape), then front caps on top, matching real-world layering.
+    // `target` is the svg element to append into. offX/offY shift baked coords (used for export framing).
+    let gradCounter = 0;
+    const rad = state.angle*Math.PI/180;
+    const D = [Math.cos(rad), Math.sin(rad)];
+
+    bakedShapes.forEach((shape, sIdx)=>{
+      if (state.extrude && wallFacetsByShape && wallFacetsByShape[sIdx].length){
+        // one shared wall gradient per shape, direction = push direction, spanning shape bbox
+        const bb = bboxOfShapes([shape]);
+        const cx=(bb.minX+bb.maxX)/2, cy=(bb.minY+bb.maxY)/2;
+        const half = Math.hypot(bb.maxX-bb.minX, bb.maxY-bb.minY)/2;
+        const gx1 = cx - D[0]*half + offX, gy1 = cy - D[1]*half + offY;
+        const gx2 = cx + D[0]*half + state.depth*D[0] + offX, gy2 = cy + D[1]*half + state.depth*D[1] + offY;
+        const gid = `wallGrad_${sIdx}_${gradCounter++}`;
+        makeLinearGradient(target, gid, gx1,gy1,gx2,gy2, state.wallNear, state.wallFar);
+        wallFacetsByShape[sIdx].forEach(poly=>{
+          const shifted = poly.map(p=>[p[0]+offX, p[1]+offY]);
+          const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+          path.setAttribute('d', polygonToPathD(shifted));
+          path.setAttribute('fill', `url(#${gid})`);
+          target.appendChild(path);
+        });
+      }
+    });
+
+    bakedShapes.forEach((shape, sIdx)=>{
+      const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      const shifted = { fill:shape.fill, subpaths: shape.subpaths.map(sp=>({
+        closed:sp.closed, segs: sp.segs.map(s=>({
+          p0:[s.p0[0]+offX,s.p0[1]+offY], p1:[s.p1[0]+offX,s.p1[1]+offY],
+          p2:[s.p2[0]+offX,s.p2[1]+offY], p3:[s.p3[0]+offX,s.p3[1]+offY],
+        }))
+      }))};
+      path.setAttribute('d', shapeToPathD(shifted));
+      path.setAttribute('fill-rule','evenodd');
+      if (state.extrude){
+        const bb = bboxOfShapes([shape]);
+        const gid = `frontGrad_${sIdx}_${gradCounter++}`;
+        makeLinearGradient(target, gid, (bb.minX+bb.maxX)/2+offX, bb.minY+offY, (bb.minX+bb.maxX)/2+offX, bb.maxY+offY, state.frontTop, state.frontBottom);
+        path.setAttribute('fill', `url(#${gid})`);
+      } else {
+        path.setAttribute('fill', shape.fill);
+      }
+      target.appendChild(path);
+    });
+  }
+
+  function renderPreview(){
+    const svg = document.getElementById('preview');
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    if (!bakedShapes) return;
+
+    let bb = bakedBBox;
+    if (state.extrude && wallFacetsByShape){
+      let minX=bb.minX,minY=bb.minY,maxX=bb.maxX,maxY=bb.maxY;
+      wallFacetsByShape.forEach(list=>list.forEach(poly=>poly.forEach(p=>{
+        if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
+        if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
+      })));
+      bb = {minX,minY,maxX,maxY};
+    }
+    const pad = Math.max(10, (bb.maxX-bb.minX)*0.1);
+    const vx = bb.minX-pad, vy = bb.minY-pad;
+    const vw = (bb.maxX-bb.minX)+pad*2 || 200;
+    const vh = (bb.maxY-bb.minY)+pad*2 || 200;
+    svg.setAttribute('viewBox', `${vx} ${vy} ${vw} ${vh}`);
+    buildSceneSVG(svg, 0, 0);
+
+    document.getElementById('bboxInfo').textContent =
+      `Baked size: ${Math.round(bb.maxX-bb.minX)} × ${Math.round(bb.maxY-bb.minY)} px`;
+  }
+
+  function loadSVGFile(file){
+    if (!file) return;
+    if (!/\.svg$/i.test(file.name) && file.type !== 'image/svg+xml'){
+      setStatus('Please upload a valid .svg file.', 'err'); return;
+    }
+    const reader = new FileReader();
+    reader.onload = e=>{
+      try{
+        originalShapes = extractSubpathsFromSVG(e.target.result);
+        setStatus('Loaded — adjust sliders to preview.', 'ok');
+        recompute();
+      }catch(err){ setStatus(err.message || 'Failed to parse SVG.', 'err'); }
+    };
+    reader.onerror = ()=>setStatus('Failed to read file.', 'err');
+    reader.readAsText(file);
+  }
+
+  function download(filename, content, mime){
+    const blob = new Blob([content], {type:mime});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // =========================================================
+  // UI WIRING
+  // =========================================================
+  const dropzone = document.getElementById('dropzone');
+  const fileInput = document.getElementById('fileInput');
+  dropzone.addEventListener('click', ()=>fileInput.click());
+  fileInput.addEventListener('change', e=>loadSVGFile(e.target.files[0]));
+  ['dragenter','dragover'].forEach(evt=>dropzone.addEventListener(evt,e=>{e.preventDefault();dropzone.classList.add('drag');}));
+  ['dragleave','drop'].forEach(evt=>dropzone.addEventListener(evt,e=>{e.preventDefault();dropzone.classList.remove('drag');}));
+  dropzone.addEventListener('drop', e=>loadSVGFile(e.dataTransfer.files[0]));
+
+  function linkPair(sliderId, numId, valId, key, fmt){
+    const slider = document.getElementById(sliderId);
+    const num = document.getElementById(numId);
+    const val = document.getElementById(valId);
+    function apply(v){ state[key] = v; if (val) val.textContent = fmt?fmt(v):v; recompute(); }
+    slider.addEventListener('input', ()=>{ num.value = slider.value; apply(parseFloat(slider.value)); });
+    num.addEventListener('input', ()=>{ slider.value = num.value; apply(parseFloat(num.value)||0); });
+  }
+  linkPair('rot','rotNum','rotVal','rot');
+  linkPair('skx','skxNum','skxVal','skx');
+  linkPair('sky','skyNum','skyVal','sky');
+  linkPair('scale','scaleNum','scaleVal','scale');
+  linkPair('ang','angNum','angVal','angle');
+  linkPair('depth','depthNum','depthVal','depth');
+
+  document.getElementById('seg').addEventListener('input', e=>{
+    state.segPerCurve = parseInt(e.target.value);
+    document.getElementById('segVal').textContent = e.target.value;
+    recompute();
+  });
+
+  document.getElementById('pivotToggle').addEventListener('change', e=>{ state.useCenter = e.target.checked; recompute(); });
+  document.getElementById('extrudeEnable').addEventListener('change', e=>{ state.extrude = e.target.checked; recompute(); });
+
+  ['frontTop','frontBottom','wallNear','wallFar'].forEach(id=>{
+    document.getElementById(id).addEventListener('input', e=>{ state[id] = e.target.value; recompute(); });
+  });
+
+  document.getElementById('resetTransformBtn').addEventListener('click', ()=>{
+    ['rot','skx','sky'].forEach(k=>{
+      document.getElementById(k).value = 0; document.getElementById(k+'Num').value = 0; state[k]=0;
+      document.getElementById(k+'Val').textContent='0';
+    });
+    document.getElementById('scale').value=100; document.getElementById('scaleNum').value=100; state.scale=100;
+    document.getElementById('scaleVal').textContent='100';
+    recompute();
+  });
+
+  document.getElementById('exportSvgBtn').addEventListener('click', ()=>{
+    if (!bakedShapes){ setStatus('Upload an SVG first.', 'err'); return; }
+    let bb = bakedBBox;
+    if (state.extrude && wallFacetsByShape){
+      let minX=bb.minX,minY=bb.minY,maxX=bb.maxX,maxY=bb.maxY;
+      wallFacetsByShape.forEach(list=>list.forEach(poly=>poly.forEach(p=>{
+        if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
+        if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
+      })));
+      bb = {minX,minY,maxX,maxY};
+    }
+    const offX = -bb.minX, offY = -bb.minY;
+    const w = bb.maxX-bb.minX, h = bb.maxY-bb.minY;
+
+    const ns = 'http://www.w3.org/2000/svg';
+    const svgOut = document.createElementNS(ns,'svg');
+    svgOut.setAttribute('xmlns', ns);
+    svgOut.setAttribute('viewBox', `0 0 ${w.toFixed(3)} ${h.toFixed(3)}`);
+    svgOut.setAttribute('width', w.toFixed(0));
+    svgOut.setAttribute('height', h.toFixed(0));
+    buildSceneSVG(svgOut, offX, offY);
+
+    const serializer = new XMLSerializer();
+    const str = '<?xml version="1.0" encoding="UTF-8"?>\n' + serializer.serializeToString(svgOut);
+    download('baked-shape.svg', str, 'image/svg+xml');
+    setStatus('Flat SVG exported (real gradients, zero transforms).', 'ok');
+  });
+
+  function hexToRgb01(hex){
+    hex = (hex||'#000000').replace('#','');
+    if (hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+    const num = parseInt(hex,16) || 0;
+    return [((num>>16)&255)/255, ((num>>8)&255)/255, (num&255)/255, 1];
+  }
+  function avgColor(hexA, hexB){
+    const a = hexToRgb01(hexA), b = hexToRgb01(hexB);
+    const toHex = v => Math.round(v*255).toString(16).padStart(2,'0');
+    return '#'+toHex((a[0]+b[0])/2)+toHex((a[1]+b[1])/2)+toHex((a[2]+b[2])/2);
+  }
+
+  function subpathToLottieShape(sp){
+    const n = sp.segs.length;
+    if (n===0) return null;
+    let vertices, segList;
+    if (sp.closed){
+      vertices = sp.segs.map(s=>s.p0);
+      segList = sp.segs.map((s,idx)=>({seg:s, from:idx, to:(idx+1)%n}));
+    } else {
+      vertices = sp.segs.map(s=>s.p0).concat([sp.segs[n-1].p3]);
+      segList = sp.segs.map((s,idx)=>({seg:s, from:idx, to:idx+1}));
+    }
+    const iArr = vertices.map(()=>[0,0]);
+    const oArr = vertices.map(()=>[0,0]);
+    segList.forEach(({seg,from,to})=>{
+      oArr[from] = [seg.p1[0]-seg.p0[0], seg.p1[1]-seg.p0[1]];
+      iArr[to]   = [seg.p2[0]-seg.p3[0], seg.p2[1]-seg.p3[1]];
+    });
+    return { v: vertices, i: iArr, o: oArr, c: sp.closed };
+  }
+
+  function polygonToLottieShape(poly){
+    const n = poly.length;
+    return { v: poly.map(p=>[p[0],p[1]]), i: poly.map(()=>[0,0]), o: poly.map(()=>[0,0]), c:true };
+  }
+
+  document.getElementById('exportLottieBtn').addEventListener('click', ()=>{
+    if (!bakedShapes){ setStatus('Upload an SVG first.', 'err'); return; }
+    let bb = bakedBBox;
+    if (state.extrude && wallFacetsByShape){
+      let minX=bb.minX,minY=bb.minY,maxX=bb.maxX,maxY=bb.maxY;
+      wallFacetsByShape.forEach(list=>list.forEach(poly=>poly.forEach(p=>{
+        if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
+        if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
+      })));
+      bb = {minX,minY,maxX,maxY};
+    }
+    const offX=-bb.minX, offY=-bb.minY;
+    const w = Math.max(1, Math.ceil(bb.maxX-bb.minX)), h = Math.max(1, Math.ceil(bb.maxY-bb.minY));
+    const items = [];
+
+    if (state.extrude && wallFacetsByShape){
+      const wallFill = avgColor(state.wallNear, state.wallFar);
+      const wallRgb = hexToRgb01(wallFill);
+      wallFacetsByShape.forEach(list=>{
+        list.forEach(poly=>{
+          const shifted = poly.map(p=>[p[0]+offX,p[1]+offY]);
+          items.push({ ty:'sh', d:1, nm:'Wall', ks:{a:0,k:polygonToLottieShape(shifted)} });
+        });
+      });
+      if (wallFacetsByShape.some(l=>l.length)){
+        items.push({ ty:'fl', c:{a:0,k:[wallRgb[0],wallRgb[1],wallRgb[2],1]}, o:{a:0,k:100}, nm:'Wall Fill' });
+      }
+    }
+
+    bakedShapes.forEach((shape, idx)=>{
+      shape.subpaths.forEach(sp=>{
+        const shifted = { closed: sp.closed, segs: sp.segs.map(s=>({
+          p0:[s.p0[0]+offX,s.p0[1]+offY], p1:[s.p1[0]+offX,s.p1[1]+offY],
+          p2:[s.p2[0]+offX,s.p2[1]+offY], p3:[s.p3[0]+offX,s.p3[1]+offY],
+        }))};
+        const ls = subpathToLottieShape(shifted);
+        if (ls) items.push({ ty:'sh', d:1, nm:'Front', ks:{a:0,k:ls} });
+      });
+      const frontFill = state.extrude ? avgColor(state.frontTop, state.frontBottom) : (shape.fill && shape.fill.startsWith('#') ? shape.fill : '#000000');
+      const rgb = hexToRgb01(frontFill);
+      items.push({ ty:'fl', c:{a:0,k:[rgb[0],rgb[1],rgb[2],1]}, o:{a:0,k:100}, nm:'Front Fill '+(idx+1) });
+    });
+
+    items.push({ ty:'tr', p:{a:0,k:[0,0]}, a:{a:0,k:[0,0]}, s:{a:0,k:[100,100]}, r:{a:0,k:0}, o:{a:0,k:100} });
+
+    const doc = {
+      v:"5.9.0", fr:30, ip:0, op:90, w, h, nm:"Baked Shape", ddd:0, assets:[], markers:[],
+      layers:[{
+        ddd:0, ind:1, ty:4, nm:"Shape Layer", sr:1,
+        ks:{ o:{a:0,k:100}, r:{a:0,k:0}, p:{a:0,k:[0,0,0]}, a:{a:0,k:[0,0,0]}, s:{a:0,k:[100,100,100]} },
+        ao:0, shapes:[{ ty:'gr', it: items, nm:'Group', np:items.length, bm:0 }],
+        ip:0, op:90, st:0, bm:0
+      }]
+    };
+    download('baked-shape.lottie.json', JSON.stringify(doc), 'application/json');
+    setStatus('Lottie JSON exported (solid fills — SVG export keeps full gradients).', 'ok');
+  });
+
+  // Placeholder shape mimicking the ring reference on first load
+  (function loadPlaceholder(){
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <path d="M100 40 A60 40 0 1 1 99.9 40 Z M100 65 A35 22 0 1 0 100.1 65 Z" fill="#8c8a63" fill-rule="evenodd"/>
+    </svg>`;
+    originalShapes = extractSubpathsFromSVG(svg);
+    setStatus('Showing a placeholder ring — upload your SVG.', '');
+    document.getElementById('extrudeEnable').checked = true;
+    state.extrude = true;
+    recompute();
+  })();
+})();
+</script>
+</body>
+</html>
