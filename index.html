@@ -144,16 +144,18 @@
           <input type="range" id="seg" min="4" max="48" step="1" value="24"/>
         </div>
 
-        <h2>Front Face Gradient</h2>
-        <div class="row2">
-          <div class="field"><label>Top</label><input type="color" id="frontTop" value="#8c8a63"/></div>
-          <div class="field"><label>Bottom</label><input type="color" id="frontBottom" value="#5f5a35"/></div>
-        </div>
+        <h2>Front Face — Solid Color</h2>
+        <div class="field"><input type="color" id="frontColor" value="#8c8a63"/></div>
 
-        <h2>Side Wall Gradient</h2>
+        <h2>Side Wall — Solid Shades</h2>
+        <p class="sub" style="margin:0;">Each wall facet gets one flat color, picked from this range by how steeply it faces the push direction — no gradient element is used.</p>
         <div class="row2">
-          <div class="field"><label>Near edge</label><input type="color" id="wallNear" value="#4a441f"/></div>
-          <div class="field"><label>Far edge</label><input type="color" id="wallFar" value="#232008"/></div>
+          <div class="field"><label>Lit edge</label><input type="color" id="wallNear" value="#4a441f"/></div>
+          <div class="field"><label>Shadow edge</label><input type="color" id="wallFar" value="#232008"/></div>
+        </div>
+        <div class="checkline">
+          <input type="checkbox" id="wallShadeToggle" checked/>
+          <label for="wallShadeToggle" style="margin:0;">Vary facet shade by angle</label>
         </div>
       </div>
     </details>
@@ -460,7 +462,8 @@
     if (n < 3) return [];
     const centroid = polygonCentroid(pts);
     const eps = 0.75;
-    const visible = new Array(n); // visible[i] = is edge (pts[i]->pts[i+1]) a push-facing wall
+    const visible = new Array(n);
+    const edgeDot = new Array(n);
     for (let i=0;i<n;i++){
       const a = pts[i], b = pts[(i+1)%n];
       const dx = b[0]-a[0], dy = b[1]-a[1];
@@ -470,28 +473,29 @@
       const mx=(a[0]+b[0])/2, my=(a[1]+b[1])/2;
       const dOrig = Math.hypot(mx-centroid[0], my-centroid[1]);
       const dTest  = Math.hypot((mx+nx*eps)-centroid[0], (my+ny*eps)-centroid[1]);
-      if (dTest < dOrig) { nx=-nx; ny=-ny; } // flip so normal points outward
+      if (dTest < dOrig) { nx=-nx; ny=-ny; }
       const dot = nx*D[0] + ny*D[1];
       visible[i] = dot > 0.02;
+      edgeDot[i] = dot;
     }
-    // find contiguous runs (handle wraparound)
-    const facets = [];
-    let i0 = 0;
-    // rotate start to a non-visible->visible boundary if possible, to avoid split runs at index 0
+    const facets = []; // {poly:[...points], t: 0..1 shade strength}
     let startIdx = 0;
     for (let i=0;i<n;i++){ if (!visible[i] && visible[(i+1)%n]) { startIdx = (i+1)%n; break; } }
     let i = 0;
     while (i < n){
       const idx = (startIdx+i)%n;
       if (visible[idx]){
-        let runStart = idx, runLen = 0;
-        while (runLen < n && visible[(startIdx+i)%n]){ i++; runLen++; }
-        // vertices from runStart .. runStart+runLen (inclusive) along front boundary
+        let runStart = idx, runLen = 0, dotSum = 0, dotCount = 0;
+        while (runLen < n && visible[(startIdx+i)%n]){
+          dotSum += edgeDot[(startIdx+i)%n]; dotCount++;
+          i++; runLen++;
+        }
         const frontChain = [];
         for (let k=0;k<=runLen;k++) frontChain.push(pts[(runStart+k)%n]);
         const backChain = frontChain.map(p=>[p[0]+D[0]*depth, p[1]+D[1]*depth]);
         const poly = frontChain.concat(backChain.slice().reverse());
-        facets.push(poly);
+        const avgDot = dotCount ? dotSum/dotCount : 0.5;
+        facets.push({ poly, t: Math.max(0, Math.min(1, avgDot)) });
       } else {
         i++;
       }
@@ -513,8 +517,8 @@
   const state = {
     rot:0, skx:0, sky:0, scale:100, useCenter:true,
     extrude:false, angle:90, depth:14, segPerCurve:24,
-    frontTop:'#8c8a63', frontBottom:'#5f5a35',
-    wallNear:'#4a441f', wallFar:'#232008'
+    frontColor:'#8c8a63',
+    wallNear:'#4a441f', wallFar:'#232008', wallShade:true
   };
   let bakedShapes = null, bakedBBox = null;
   let wallFacetsByShape = null; // parallel to bakedShapes
@@ -547,56 +551,38 @@
     renderPreview();
   }
 
-  function ensureDefs(svg){
-    let defs = svg.querySelector('defs');
-    if (!defs){ defs = document.createElementNS('http://www.w3.org/2000/svg','defs'); svg.insertBefore(defs, svg.firstChild); }
-    return defs;
+  function hexToRgbArr(hex){
+    hex = (hex||'#000000').replace('#','');
+    if (hex.length===3) hex = hex.split('').map(c=>c+c).join('');
+    const num = parseInt(hex,16) || 0;
+    return [(num>>16)&255, (num>>8)&255, num&255];
   }
-
-  function makeLinearGradient(svg, id, x1,y1,x2,y2, colorA, colorB){
-    const defs = ensureDefs(svg);
-    const grad = document.createElementNS('http://www.w3.org/2000/svg','linearGradient');
-    grad.setAttribute('id', id);
-    grad.setAttribute('gradientUnits','userSpaceOnUse');
-    grad.setAttribute('x1',x1.toFixed(3)); grad.setAttribute('y1',y1.toFixed(3));
-    grad.setAttribute('x2',x2.toFixed(3)); grad.setAttribute('y2',y2.toFixed(3));
-    const s1 = document.createElementNS('http://www.w3.org/2000/svg','stop');
-    s1.setAttribute('offset','0%'); s1.setAttribute('stop-color', colorA);
-    const s2 = document.createElementNS('http://www.w3.org/2000/svg','stop');
-    s2.setAttribute('offset','100%'); s2.setAttribute('stop-color', colorB);
-    grad.appendChild(s1); grad.appendChild(s2);
-    defs.appendChild(grad);
-    return id;
+  function lerpColor(hexA, hexB, t){
+    const a = hexToRgbArr(hexA), b = hexToRgbArr(hexB);
+    const r = Math.round(a[0]+(b[0]-a[0])*t);
+    const g = Math.round(a[1]+(b[1]-a[1])*t);
+    const bl = Math.round(a[2]+(b[2]-a[2])*t);
+    const toHex = v => v.toString(16).padStart(2,'0');
+    return '#'+toHex(r)+toHex(g)+toHex(bl);
   }
 
   function buildSceneSVG(target, offX, offY){
     // Draws walls first (per shape), then front caps on top, matching real-world layering.
-    // `target` is the svg element to append into. offX/offY shift baked coords (used for export framing).
-    let gradCounter = 0;
-    const rad = state.angle*Math.PI/180;
-    const D = [Math.cos(rad), Math.sin(rad)];
-
+    // Every path gets ONE flat fill color — no gradients, no defs, no masks/clipPaths anywhere.
     bakedShapes.forEach((shape, sIdx)=>{
       if (state.extrude && wallFacetsByShape && wallFacetsByShape[sIdx].length){
-        // one shared wall gradient per shape, direction = push direction, spanning shape bbox
-        const bb = bboxOfShapes([shape]);
-        const cx=(bb.minX+bb.maxX)/2, cy=(bb.minY+bb.maxY)/2;
-        const half = Math.hypot(bb.maxX-bb.minX, bb.maxY-bb.minY)/2;
-        const gx1 = cx - D[0]*half + offX, gy1 = cy - D[1]*half + offY;
-        const gx2 = cx + D[0]*half + state.depth*D[0] + offX, gy2 = cy + D[1]*half + state.depth*D[1] + offY;
-        const gid = `wallGrad_${sIdx}_${gradCounter++}`;
-        makeLinearGradient(target, gid, gx1,gy1,gx2,gy2, state.wallNear, state.wallFar);
-        wallFacetsByShape[sIdx].forEach(poly=>{
-          const shifted = poly.map(p=>[p[0]+offX, p[1]+offY]);
+        wallFacetsByShape[sIdx].forEach(facet=>{
+          const shifted = facet.poly.map(p=>[p[0]+offX, p[1]+offY]);
           const path = document.createElementNS('http://www.w3.org/2000/svg','path');
           path.setAttribute('d', polygonToPathD(shifted));
-          path.setAttribute('fill', `url(#${gid})`);
+          const fill = state.wallShade ? lerpColor(state.wallNear, state.wallFar, facet.t) : state.wallNear;
+          path.setAttribute('fill', fill);
           target.appendChild(path);
         });
       }
     });
 
-    bakedShapes.forEach((shape, sIdx)=>{
+    bakedShapes.forEach((shape)=>{
       const path = document.createElementNS('http://www.w3.org/2000/svg','path');
       const shifted = { fill:shape.fill, subpaths: shape.subpaths.map(sp=>({
         closed:sp.closed, segs: sp.segs.map(s=>({
@@ -606,14 +592,7 @@
       }))};
       path.setAttribute('d', shapeToPathD(shifted));
       path.setAttribute('fill-rule','evenodd');
-      if (state.extrude){
-        const bb = bboxOfShapes([shape]);
-        const gid = `frontGrad_${sIdx}_${gradCounter++}`;
-        makeLinearGradient(target, gid, (bb.minX+bb.maxX)/2+offX, bb.minY+offY, (bb.minX+bb.maxX)/2+offX, bb.maxY+offY, state.frontTop, state.frontBottom);
-        path.setAttribute('fill', `url(#${gid})`);
-      } else {
-        path.setAttribute('fill', shape.fill);
-      }
+      path.setAttribute('fill', state.extrude ? state.frontColor : shape.fill);
       target.appendChild(path);
     });
   }
@@ -626,7 +605,7 @@
     let bb = bakedBBox;
     if (state.extrude && wallFacetsByShape){
       let minX=bb.minX,minY=bb.minY,maxX=bb.maxX,maxY=bb.maxY;
-      wallFacetsByShape.forEach(list=>list.forEach(poly=>poly.forEach(p=>{
+      wallFacetsByShape.forEach(list=>list.forEach(facet=>facet.poly.forEach(p=>{
         if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
         if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
       })));
@@ -703,8 +682,9 @@
 
   document.getElementById('pivotToggle').addEventListener('change', e=>{ state.useCenter = e.target.checked; recompute(); });
   document.getElementById('extrudeEnable').addEventListener('change', e=>{ state.extrude = e.target.checked; recompute(); });
+  document.getElementById('wallShadeToggle').addEventListener('change', e=>{ state.wallShade = e.target.checked; recompute(); });
 
-  ['frontTop','frontBottom','wallNear','wallFar'].forEach(id=>{
+  ['frontColor','wallNear','wallFar'].forEach(id=>{
     document.getElementById(id).addEventListener('input', e=>{ state[id] = e.target.value; recompute(); });
   });
 
@@ -723,7 +703,7 @@
     let bb = bakedBBox;
     if (state.extrude && wallFacetsByShape){
       let minX=bb.minX,minY=bb.minY,maxX=bb.maxX,maxY=bb.maxY;
-      wallFacetsByShape.forEach(list=>list.forEach(poly=>poly.forEach(p=>{
+      wallFacetsByShape.forEach(list=>list.forEach(facet=>facet.poly.forEach(p=>{
         if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
         if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
       })));
@@ -788,7 +768,7 @@
     let bb = bakedBBox;
     if (state.extrude && wallFacetsByShape){
       let minX=bb.minX,minY=bb.minY,maxX=bb.maxX,maxY=bb.maxY;
-      wallFacetsByShape.forEach(list=>list.forEach(poly=>poly.forEach(p=>{
+      wallFacetsByShape.forEach(list=>list.forEach(facet=>facet.poly.forEach(p=>{
         if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
         if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
       })));
@@ -802,8 +782,8 @@
       const wallFill = avgColor(state.wallNear, state.wallFar);
       const wallRgb = hexToRgb01(wallFill);
       wallFacetsByShape.forEach(list=>{
-        list.forEach(poly=>{
-          const shifted = poly.map(p=>[p[0]+offX,p[1]+offY]);
+        list.forEach(facet=>{
+          const shifted = facet.poly.map(p=>[p[0]+offX,p[1]+offY]);
           items.push({ ty:'sh', d:1, nm:'Wall', ks:{a:0,k:polygonToLottieShape(shifted)} });
         });
       });
@@ -821,7 +801,7 @@
         const ls = subpathToLottieShape(shifted);
         if (ls) items.push({ ty:'sh', d:1, nm:'Front', ks:{a:0,k:ls} });
       });
-      const frontFill = state.extrude ? avgColor(state.frontTop, state.frontBottom) : (shape.fill && shape.fill.startsWith('#') ? shape.fill : '#000000');
+      const frontFill = state.extrude ? state.frontColor : (shape.fill && shape.fill.startsWith('#') ? shape.fill : '#000000');
       const rgb = hexToRgb01(frontFill);
       items.push({ ty:'fl', c:{a:0,k:[rgb[0],rgb[1],rgb[2],1]}, o:{a:0,k:100}, nm:'Front Fill '+(idx+1) });
     });
