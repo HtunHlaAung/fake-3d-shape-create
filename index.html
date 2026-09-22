@@ -160,13 +160,71 @@
       </div>
     </details>
 
+    <details open>
+      <summary>3 · Polish</summary>
+      <div class="stack">
+        <div class="checkline">
+          <input type="checkbox" id="shadowEnable" checked/>
+          <label for="shadowEnable" style="margin:0;">Ground shadow</label>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Color</label><input type="color" id="shadowColor" value="#000000"/></div>
+          <div class="field">
+            <label>Opacity <span class="val" id="shadowOpVal">28</span></label>
+            <input type="range" id="shadowOp" min="0" max="80" step="1" value="28"/>
+          </div>
+        </div>
+
+        <div class="checkline">
+          <input type="checkbox" id="highlightEnable" checked/>
+          <label for="highlightEnable" style="margin:0;">Top edge highlight</label>
+        </div>
+        <div class="row2">
+          <div class="field"><label>Color</label><input type="color" id="highlightColor" value="#e8e2b0"/></div>
+          <div class="field">
+            <label>Width (px) <span class="val" id="hlWidthVal">1.5</span></label>
+            <input type="range" id="hlWidth" min="0" max="6" step="0.5" value="1.5"/>
+          </div>
+        </div>
+      </div>
+    </details>
+
+    <details open>
+      <summary>4 · Perspective (3D tilt)</summary>
+      <div class="stack">
+        <div class="checkline">
+          <input type="checkbox" id="perspectiveEnable"/>
+          <label for="perspectiveEnable" style="margin:0;">Enable perspective</label>
+        </div>
+        <div class="field">
+          <label>Tilt X (°, top/bottom recede) <span class="val" id="tiltXVal">0</span></label>
+          <div class="slider-row">
+            <input type="range" id="tiltX" min="-60" max="60" step="1" value="0"/>
+            <input type="number" id="tiltXNum" min="-60" max="60" step="1" value="0"/>
+          </div>
+        </div>
+        <div class="field">
+          <label>Tilt Y (°, left/right recede) <span class="val" id="tiltYVal">0</span></label>
+          <div class="slider-row">
+            <input type="range" id="tiltY" min="-60" max="60" step="1" value="0"/>
+            <input type="number" id="tiltYNum" min="-60" max="60" step="1" value="0"/>
+          </div>
+        </div>
+        <div class="field">
+          <label>Perspective Strength <span class="val" id="perspStrVal">40</span></label>
+          <input type="range" id="perspStr" min="0" max="100" step="1" value="40"/>
+        </div>
+        <p class="sub" style="margin:0;">Tilts the whole flat icon (front + walls + shadow) in 3D and projects it back to a flat image — like viewing a card from an angle. Curves are auto-flattened to straight segments while this is on (needed for correct projection); raise Curve Smoothness above if edges look faceted.</p>
+      </div>
+    </details>
+
     <hr/>
 
     <div class="btn-row">
       <button id="exportSvgBtn">Export Flat SVG</button>
       <button id="exportLottieBtn" class="secondary">Export Lottie JSON</button>
     </div>
-    <p class="sub" style="margin-top:-6px;">SVG export is fully flat (real gradients, real coordinates, zero transforms) — drag it straight into Lottielab.</p>
+    <p class="sub" style="margin-top:-6px;">SVG export is fully flat (solid fills only, real coordinates, zero transforms) — drag it straight into Lottielab.</p>
   </div>
 
   <div id="stage">
@@ -518,8 +576,102 @@
     rot:0, skx:0, sky:0, scale:100, useCenter:true,
     extrude:false, angle:90, depth:14, segPerCurve:24,
     frontColor:'#8c8a63',
-    wallNear:'#4a441f', wallFar:'#232008', wallShade:true
+    wallNear:'#4a441f', wallFar:'#232008', wallShade:true,
+    shadowEnable:true, shadowColor:'#000000', shadowOpacity:28,
+    highlightEnable:true, highlightColor:'#e8e2b0', highlightWidth:1.5,
+    perspectiveEnable:false, tiltX:0, tiltY:0, perspectiveStrength:40
   };
+  let perspParams = null; // computed each recompute() when perspective is enabled
+
+  function computePerspectiveParams(){
+    if (!bakedBBox) return null;
+    const cx=(bakedBBox.minX+bakedBBox.maxX)/2, cy=(bakedBBox.minY+bakedBBox.maxY)/2;
+    const diag = Math.hypot(bakedBBox.maxX-bakedBBox.minX, bakedBBox.maxY-bakedBBox.minY) || 100;
+    const dist = diag*(110-state.perspectiveStrength)/20;
+    return { cx, cy, dist, tiltX: state.tiltX*Math.PI/180, tiltY: state.tiltY*Math.PI/180 };
+  }
+
+  // Treats the flat art as a rigid plane at Z=0, rotates it in 3D around its own
+  // center, then projects back to 2D with a simple pinhole camera. Straight lines
+  // stay straight under this map (true projective property) — only curves need
+  // pre-flattening, handled by buildRenderableShape below.
+  function projectPoint(p, params){
+    const X0 = p[0]-params.cx, Y0 = p[1]-params.cy, Z0 = 0;
+    const cosX=Math.cos(params.tiltX), sinX=Math.sin(params.tiltX);
+    const Y1 = Y0*cosX - Z0*sinX, Z1 = Y0*sinX + Z0*cosX, X1 = X0;
+    const cosY=Math.cos(params.tiltY), sinY=Math.sin(params.tiltY);
+    const X2 = X1*cosY + Z1*sinY, Z2 = -X1*sinY + Z1*cosY, Y2 = Y1;
+    const scale = params.dist/(params.dist+Z2);
+    return [ X2*scale+params.cx, Y2*scale+params.cy ];
+  }
+  function projectIfEnabled(p, params){ return params ? projectPoint(p, params) : p; }
+
+  // Uniform representation for anything that can be either a smooth bezier shape
+  // (perspective off) or a flattened+projected polygon (perspective on).
+  function buildRenderableShape(shape, shiftX, shiftY, params){
+    if (!params){
+      const subpaths = shape.subpaths.map(sp=>({
+        closed: sp.closed,
+        segs: sp.segs.map(s=>({
+          p0:[s.p0[0]+shiftX, s.p0[1]+shiftY], p1:[s.p1[0]+shiftX, s.p1[1]+shiftY],
+          p2:[s.p2[0]+shiftX, s.p2[1]+shiftY], p3:[s.p3[0]+shiftX, s.p3[1]+shiftY],
+        }))
+      }));
+      return { mode:'bezier', subpaths };
+    }
+    const subpaths = shape.subpaths.map(sp=>{
+      const poly = sampleSubpathToPolygon(sp, state.segPerCurve).map(p=>[p[0]+shiftX, p[1]+shiftY]);
+      return poly.map(p=>projectPoint(p, params));
+    });
+    return { mode:'poly', subpaths };
+  }
+
+  function renderableToPathD(rep, dx, dy){
+    let d = '';
+    if (rep.mode==='bezier'){
+      rep.subpaths.forEach(sp=>{
+        if (!sp.segs.length) return;
+        const p0=sp.segs[0].p0;
+        d += `M ${(p0[0]+dx).toFixed(3)} ${(p0[1]+dy).toFixed(3)} `;
+        sp.segs.forEach(seg=>{
+          d += `C ${(seg.p1[0]+dx).toFixed(3)} ${(seg.p1[1]+dy).toFixed(3)} ${(seg.p2[0]+dx).toFixed(3)} ${(seg.p2[1]+dy).toFixed(3)} ${(seg.p3[0]+dx).toFixed(3)} ${(seg.p3[1]+dy).toFixed(3)} `;
+        });
+        if (sp.closed) d += 'Z ';
+      });
+    } else {
+      rep.subpaths.forEach(poly=>{
+        if (!poly.length) return;
+        d += `M ${(poly[0][0]+dx).toFixed(3)} ${(poly[0][1]+dy).toFixed(3)} `;
+        for (let i=1;i<poly.length;i++) d += `L ${(poly[i][0]+dx).toFixed(3)} ${(poly[i][1]+dy).toFixed(3)} `;
+        d += 'Z ';
+      });
+    }
+    return d.trim();
+  }
+
+  function renderableAllPoints(rep){
+    const pts = [];
+    if (rep.mode==='bezier') rep.subpaths.forEach(sp=>sp.segs.forEach(s=>pts.push(s.p0,s.p1,s.p2,s.p3)));
+    else rep.subpaths.forEach(poly=>poly.forEach(p=>pts.push(p)));
+    return pts;
+  }
+
+  function renderableToLottieItems(rep, nm, dx, dy){
+    dx = dx||0; dy = dy||0;
+    const items = [];
+    if (rep.mode==='bezier'){
+      rep.subpaths.forEach(sp=>{
+        const ls = subpathToLottieShape(sp);
+        if (ls){ ls.v = ls.v.map(p=>[p[0]+dx,p[1]+dy]); items.push({ty:'sh', d:1, nm, ks:{a:0,k:ls}}); }
+      });
+    } else {
+      rep.subpaths.forEach(poly=>{
+        const shifted = poly.map(p=>[p[0]+dx,p[1]+dy]);
+        items.push({ty:'sh', d:1, nm, ks:{a:0,k:polygonToLottieShape(shifted)}});
+      });
+    }
+    return items;
+  }
   let bakedShapes = null, bakedBBox = null;
   let wallFacetsByShape = null; // parallel to bakedShapes
 
@@ -548,6 +700,9 @@
         return facetsPerSubpath.flat();
       });
     }
+
+    perspParams = state.perspectiveEnable ? computePerspectiveParams() : null;
+
     renderPreview();
   }
 
@@ -567,12 +722,30 @@
   }
 
   function buildSceneSVG(target, offX, offY){
-    // Draws walls first (per shape), then front caps on top, matching real-world layering.
+    // Draws: ground shadow → walls → front caps (+ optional highlight stroke) — matching real-world layering.
     // Every path gets ONE flat fill color — no gradients, no defs, no masks/clipPaths anywhere.
+    const rad = state.angle*Math.PI/180;
+    const D = [Math.cos(rad), Math.sin(rad)];
+    const params = perspParams;
+
+    if (state.extrude && state.shadowEnable){
+      const shadowShift = state.depth*1.4 + 6;
+      const sx = D[0]*shadowShift, sy = D[1]*shadowShift;
+      bakedShapes.forEach((shape)=>{
+        const rep = buildRenderableShape(shape, sx, sy, params);
+        const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+        path.setAttribute('d', renderableToPathD(rep, offX, offY));
+        path.setAttribute('fill-rule','evenodd');
+        path.setAttribute('fill', state.shadowColor);
+        path.setAttribute('fill-opacity', (state.shadowOpacity/100).toFixed(2));
+        target.appendChild(path);
+      });
+    }
+
     bakedShapes.forEach((shape, sIdx)=>{
       if (state.extrude && wallFacetsByShape && wallFacetsByShape[sIdx].length){
         wallFacetsByShape[sIdx].forEach(facet=>{
-          const shifted = facet.poly.map(p=>[p[0]+offX, p[1]+offY]);
+          const shifted = facet.poly.map(p=>{ const q = projectIfEnabled(p, params); return [q[0]+offX, q[1]+offY]; });
           const path = document.createElementNS('http://www.w3.org/2000/svg','path');
           path.setAttribute('d', polygonToPathD(shifted));
           const fill = state.wallShade ? lerpColor(state.wallNear, state.wallFar, facet.t) : state.wallNear;
@@ -583,18 +756,47 @@
     });
 
     bakedShapes.forEach((shape)=>{
+      const rep = buildRenderableShape(shape, 0, 0, params);
       const path = document.createElementNS('http://www.w3.org/2000/svg','path');
-      const shifted = { fill:shape.fill, subpaths: shape.subpaths.map(sp=>({
-        closed:sp.closed, segs: sp.segs.map(s=>({
-          p0:[s.p0[0]+offX,s.p0[1]+offY], p1:[s.p1[0]+offX,s.p1[1]+offY],
-          p2:[s.p2[0]+offX,s.p2[1]+offY], p3:[s.p3[0]+offX,s.p3[1]+offY],
-        }))
-      }))};
-      path.setAttribute('d', shapeToPathD(shifted));
+      path.setAttribute('d', renderableToPathD(rep, offX, offY));
       path.setAttribute('fill-rule','evenodd');
       path.setAttribute('fill', state.extrude ? state.frontColor : shape.fill);
+      if (state.extrude && state.highlightEnable && state.highlightWidth > 0){
+        path.setAttribute('stroke', state.highlightColor);
+        path.setAttribute('stroke-width', state.highlightWidth);
+        path.setAttribute('stroke-linejoin', 'round');
+      }
       target.appendChild(path);
     });
+  }
+
+  function computeSceneBBox(){
+    const bb = bakedBBox;
+    let minX=bb.minX,minY=bb.minY,maxX=bb.maxX,maxY=bb.maxY;
+    const params = perspParams;
+
+    function grow(p){ if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0]; if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1]; }
+
+    if (state.extrude && wallFacetsByShape){
+      wallFacetsByShape.forEach(list=>list.forEach(facet=>facet.poly.forEach(p=>grow(projectIfEnabled(p, params)))));
+    }
+    if (params){
+      // front caps only move within their own bbox under rotation/projection in the
+      // common case, but re-check corners explicitly to be safe with strong tilts.
+      bakedShapes.forEach(shape=>{
+        const rep = buildRenderableShape(shape, 0, 0, params);
+        renderableAllPoints(rep).forEach(grow);
+      });
+    }
+    if (state.extrude && state.shadowEnable){
+      const rad = state.angle*Math.PI/180;
+      const sx = Math.cos(rad)*(state.depth*1.4+6), sy = Math.sin(rad)*(state.depth*1.4+6);
+      bakedShapes.forEach(shape=>{
+        const rep = buildRenderableShape(shape, sx, sy, params);
+        renderableAllPoints(rep).forEach(grow);
+      });
+    }
+    return {minX,minY,maxX,maxY};
   }
 
   function renderPreview(){
@@ -602,15 +804,7 @@
     while (svg.firstChild) svg.removeChild(svg.firstChild);
     if (!bakedShapes) return;
 
-    let bb = bakedBBox;
-    if (state.extrude && wallFacetsByShape){
-      let minX=bb.minX,minY=bb.minY,maxX=bb.maxX,maxY=bb.maxY;
-      wallFacetsByShape.forEach(list=>list.forEach(facet=>facet.poly.forEach(p=>{
-        if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
-        if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
-      })));
-      bb = {minX,minY,maxX,maxY};
-    }
+    const bb = computeSceneBBox();
     const pad = Math.max(10, (bb.maxX-bb.minX)*0.1);
     const vx = bb.minX-pad, vy = bb.minY-pad;
     const vw = (bb.maxX-bb.minX)+pad*2 || 200;
@@ -673,18 +867,38 @@
   linkPair('scale','scaleNum','scaleVal','scale');
   linkPair('ang','angNum','angVal','angle');
   linkPair('depth','depthNum','depthVal','depth');
+  linkPair('tiltX','tiltXNum','tiltXVal','tiltX');
+  linkPair('tiltY','tiltYNum','tiltYVal','tiltY');
 
   document.getElementById('seg').addEventListener('input', e=>{
     state.segPerCurve = parseInt(e.target.value);
     document.getElementById('segVal').textContent = e.target.value;
     recompute();
   });
+  document.getElementById('shadowOp').addEventListener('input', e=>{
+    state.shadowOpacity = parseFloat(e.target.value);
+    document.getElementById('shadowOpVal').textContent = e.target.value;
+    recompute();
+  });
+  document.getElementById('hlWidth').addEventListener('input', e=>{
+    state.highlightWidth = parseFloat(e.target.value);
+    document.getElementById('hlWidthVal').textContent = e.target.value;
+    recompute();
+  });
+  document.getElementById('perspStr').addEventListener('input', e=>{
+    state.perspectiveStrength = parseFloat(e.target.value);
+    document.getElementById('perspStrVal').textContent = e.target.value;
+    recompute();
+  });
 
   document.getElementById('pivotToggle').addEventListener('change', e=>{ state.useCenter = e.target.checked; recompute(); });
   document.getElementById('extrudeEnable').addEventListener('change', e=>{ state.extrude = e.target.checked; recompute(); });
   document.getElementById('wallShadeToggle').addEventListener('change', e=>{ state.wallShade = e.target.checked; recompute(); });
+  document.getElementById('shadowEnable').addEventListener('change', e=>{ state.shadowEnable = e.target.checked; recompute(); });
+  document.getElementById('highlightEnable').addEventListener('change', e=>{ state.highlightEnable = e.target.checked; recompute(); });
+  document.getElementById('perspectiveEnable').addEventListener('change', e=>{ state.perspectiveEnable = e.target.checked; recompute(); });
 
-  ['frontColor','wallNear','wallFar'].forEach(id=>{
+  ['frontColor','wallNear','wallFar','shadowColor','highlightColor'].forEach(id=>{
     document.getElementById(id).addEventListener('input', e=>{ state[id] = e.target.value; recompute(); });
   });
 
@@ -700,15 +914,7 @@
 
   document.getElementById('exportSvgBtn').addEventListener('click', ()=>{
     if (!bakedShapes){ setStatus('Upload an SVG first.', 'err'); return; }
-    let bb = bakedBBox;
-    if (state.extrude && wallFacetsByShape){
-      let minX=bb.minX,minY=bb.minY,maxX=bb.maxX,maxY=bb.maxY;
-      wallFacetsByShape.forEach(list=>list.forEach(facet=>facet.poly.forEach(p=>{
-        if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
-        if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
-      })));
-      bb = {minX,minY,maxX,maxY};
-    }
+    const bb = computeSceneBBox();
     const offX = -bb.minX, offY = -bb.minY;
     const w = bb.maxX-bb.minX, h = bb.maxY-bb.minY;
 
@@ -723,7 +929,7 @@
     const serializer = new XMLSerializer();
     const str = '<?xml version="1.0" encoding="UTF-8"?>\n' + serializer.serializeToString(svgOut);
     download('baked-shape.svg', str, 'image/svg+xml');
-    setStatus('Flat SVG exported (real gradients, zero transforms).', 'ok');
+    setStatus('Flat SVG exported (solid fills, zero transforms).', 'ok');
   });
 
   function hexToRgb01(hex){
@@ -765,25 +971,30 @@
 
   document.getElementById('exportLottieBtn').addEventListener('click', ()=>{
     if (!bakedShapes){ setStatus('Upload an SVG first.', 'err'); return; }
-    let bb = bakedBBox;
-    if (state.extrude && wallFacetsByShape){
-      let minX=bb.minX,minY=bb.minY,maxX=bb.maxX,maxY=bb.maxY;
-      wallFacetsByShape.forEach(list=>list.forEach(facet=>facet.poly.forEach(p=>{
-        if(p[0]<minX)minX=p[0]; if(p[0]>maxX)maxX=p[0];
-        if(p[1]<minY)minY=p[1]; if(p[1]>maxY)maxY=p[1];
-      })));
-      bb = {minX,minY,maxX,maxY};
-    }
+    const bb = computeSceneBBox();
     const offX=-bb.minX, offY=-bb.minY;
     const w = Math.max(1, Math.ceil(bb.maxX-bb.minX)), h = Math.max(1, Math.ceil(bb.maxY-bb.minY));
     const items = [];
+    const params = perspParams;
+
+    if (state.extrude && state.shadowEnable){
+      const shadowShift = state.depth*1.4 + 6;
+      const rad = state.angle*Math.PI/180;
+      const sx = Math.cos(rad)*shadowShift, sy = Math.sin(rad)*shadowShift;
+      const shadowRgb = hexToRgb01(state.shadowColor);
+      bakedShapes.forEach(shape=>{
+        const rep = buildRenderableShape(shape, sx, sy, params);
+        items.push(...renderableToLottieItems(rep, 'Shadow', offX, offY));
+      });
+      items.push({ ty:'fl', c:{a:0,k:[shadowRgb[0],shadowRgb[1],shadowRgb[2],1]}, o:{a:0,k:state.shadowOpacity}, nm:'Shadow Fill' });
+    }
 
     if (state.extrude && wallFacetsByShape){
       const wallFill = avgColor(state.wallNear, state.wallFar);
       const wallRgb = hexToRgb01(wallFill);
       wallFacetsByShape.forEach(list=>{
         list.forEach(facet=>{
-          const shifted = facet.poly.map(p=>[p[0]+offX,p[1]+offY]);
+          const shifted = facet.poly.map(p=>{ const q = projectIfEnabled(p, params); return [q[0]+offX, q[1]+offY]; });
           items.push({ ty:'sh', d:1, nm:'Wall', ks:{a:0,k:polygonToLottieShape(shifted)} });
         });
       });
@@ -793,14 +1004,8 @@
     }
 
     bakedShapes.forEach((shape, idx)=>{
-      shape.subpaths.forEach(sp=>{
-        const shifted = { closed: sp.closed, segs: sp.segs.map(s=>({
-          p0:[s.p0[0]+offX,s.p0[1]+offY], p1:[s.p1[0]+offX,s.p1[1]+offY],
-          p2:[s.p2[0]+offX,s.p2[1]+offY], p3:[s.p3[0]+offX,s.p3[1]+offY],
-        }))};
-        const ls = subpathToLottieShape(shifted);
-        if (ls) items.push({ ty:'sh', d:1, nm:'Front', ks:{a:0,k:ls} });
-      });
+      const rep = buildRenderableShape(shape, 0, 0, params);
+      items.push(...renderableToLottieItems(rep, 'Front', offX, offY));
       const frontFill = state.extrude ? state.frontColor : (shape.fill && shape.fill.startsWith('#') ? shape.fill : '#000000');
       const rgb = hexToRgb01(frontFill);
       items.push({ ty:'fl', c:{a:0,k:[rgb[0],rgb[1],rgb[2],1]}, o:{a:0,k:100}, nm:'Front Fill '+(idx+1) });
@@ -818,7 +1023,7 @@
       }]
     };
     download('baked-shape.lottie.json', JSON.stringify(doc), 'application/json');
-    setStatus('Lottie JSON exported (solid fills — SVG export keeps full gradients).', 'ok');
+    setStatus('Lottie JSON exported (solid fills; perspective/curves flattened to polygons).', 'ok');
   });
 
   // Placeholder shape mimicking the ring reference on first load
